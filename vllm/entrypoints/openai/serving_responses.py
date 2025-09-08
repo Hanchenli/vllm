@@ -62,9 +62,13 @@ from vllm.logprobs import Logprob as SampleLogprob
 from vllm.logprobs import SampleLogprobs
 from vllm.outputs import CompletionOutput
 from vllm.reasoning import ReasoningParser, ReasoningParserManager
-from vllm.sampling_params import SamplingParams
+from vllm.sampling_params import SamplingParams, GuidedDecodingParams
 from vllm.transformers_utils.tokenizer import AnyTokenizer
 from vllm.utils import random_uuid
+# no_func_tag = '{"type": "structural_tag", "structures": [{"begin": "<|channel|>analysis<message>", "schema": {"type": "string"}, "end": "<|end|>"}, {"begin": "<|channel|>final<message>", "schema": {"type": "string"}, "end": "<|return|>"}], "triggers": ["<|channel|>"]}'
+no_func_tag = '{"type": "structural_tag", "structures": [{"begin": "why_THIS_TAG", "schema": {"type": "string"}, "end": "<|end|>"}], "triggers": ["why"]}'
+
+only_builtin_tag = '{"type": "structural_tag", "structures": [{"begin": "<|channel|>analysis", "schema": {"type": "string"}, "end": "<|end|>"}, {"begin": "<|channel|>final<message>", "schema": {"type": "string"}, "end": "<|return|>"}], "triggers": ["<|channel|>"]}'
 
 logger = init_logger(__name__)
 
@@ -177,6 +181,8 @@ class OpenAIServingResponses(OpenAIServing):
         request: ResponsesRequest,
         raw_request: Optional[Request] = None,
     ) -> Union[AsyncGenerator[str, None], ResponsesResponse, ErrorResponse]:
+
+
         error_check_ret = await self._check_model(request)
         if error_check_ret is not None:
             logger.error("Error with model %s", error_check_ret)
@@ -279,12 +285,42 @@ class OpenAIServingResponses(OpenAIServing):
                     engine_prompt["prompt_token_ids"])
                 sampling_params = request.to_sampling_params(
                     default_max_tokens, self.default_sampling_params)
+                # TODO Hanchen, if toolserver is demo, then add a structural tag to make sure it only does analysis. 
+                # If toolserver is none, add tag to make sure it does not generate tool
+                logger.info("fuck I am adding the tags")
+                if self.use_harmony:
+                    if self.tool_server is None:
+                        #we are adding a structural tag to responsesRequest
+                        if sampling_params.guided_decoding is None:
+                            sampling_params.guided_decoding = GuidedDecodingParams(
+                                structural_tag=no_func_tag
+                            )
+                        else:
+                            import os
+                            os.abort(400, "Structural tag already exists")
+                        # request.structural_tag = StructuralTag(
+                    else:
+                        from vllm.entrypoints.tool_server import DemoToolServer
+                        if isinstance(self.tool_server, DemoToolServer):
+                            if sampling_params.guided_decoding is None:
+                                sampling_params.guided_decoding = GuidedDecodingParams(
+                                    structural_tag=only_builtin_tag
+                                )
+                            else:
+                                import os
+                                os.abort(400, "Structural tag already exists")
+                        else:
+                            #TODO Hanchen, need to do MCP function checks here
+                            pass
+                logger.info("fuck I am done adding the tags")
+
 
                 trace_headers = (None if raw_request is None else await
                                  self._get_trace_headers(raw_request.headers))
 
                 context: ConversationContext
                 if self.use_harmony:
+                    logger.info("fuck I am in serving_responses.py")
                     if request.stream:
                         context = StreamingHarmonyContext(
                             messages, available_tools)

@@ -161,6 +161,7 @@ class DemoToolServer(ToolServer):
         browser_tool = HarmonyBrowserTool()
         if browser_tool.enabled:
             self.tools["browser"] = browser_tool
+            logger.info("fuck right now browser should be put into the tool list")
         python_tool = HarmonyPythonTool()
         if python_tool.enabled:
             self.tools["python"] = python_tool

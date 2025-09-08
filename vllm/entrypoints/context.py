@@ -66,7 +66,7 @@ class SimpleContext(ConversationContext):
                                  exit_stack: AsyncExitStack) -> None:
         pass
 
-
+#TODO hanchen this manages token_id to harmony message
 class HarmonyContext(ConversationContext):
 
     def __init__(
@@ -74,6 +74,7 @@ class HarmonyContext(ConversationContext):
         messages: list,
         available_tools: list[str],
     ):
+        logger.info("fuck Initializing HarmonyContext")
         self._messages = messages
         self.available_tools = available_tools
         self._tool_sessions: dict[str, Union[ClientSession, Tool]] = {}
@@ -96,19 +97,66 @@ class HarmonyContext(ConversationContext):
     def _update_num_output_tokens(self, token_ids: Sequence[int]):
         self.num_output_tokens += len(token_ids)
 
+    #NOTE Hanchen this will be called after token is generated or tool output is generated
+    #NOTE Hanchen if we identify that the output is going to be a tool call.
+    # then we need to add structured decoding constraints for this current request
+    #TODO Hanchen Need a way to add structured decoding constraints for this current request
+
+    # def append_output(self, output) -> None:
+    #     logger.info("fuck Appending output")
+    #     if isinstance(output, RequestOutput):
+    #         self._update_num_prompt_tokens(output)
+    #         output_token_ids = output.outputs[0].token_ids
+    #         self._update_num_output_tokens(output_token_ids)
+  
+    #         self.parser = get_streamable_parser_for_assistant()
+    #         for token_id in output_token_ids:
+    #             self.parser.process(token_id)
+    #         output_msgs = self.parser.messages
+    #     else:
+    #         # Tool output.
+    #         output_msgs = output
+    #     self._messages.extend(output_msgs)
+    # # Store the output messages to a local log file for debugging/auditing.
+    # import os
+
+    def _log_output_to_file(self, output_token_ids):
+        log_dir = "./harmony_logs"
+        logger.info("LHC Logging output to file: %s", log_dir)
+        import os
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, "output.log")
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained("openai/gpt-oss-20b")
+        try:
+            
+            logger.info("LHC Logging output to file: %s", log_file)
+            with open(log_file, "a", encoding="utf-8") as f:
+                for token_id in output_token_ids:
+                    # Use harmony detokenizer to detokenize the output tokens and do without the "\n"
+                    msg = tokenizer.decode([token_id])
+                    f.write(str(msg))
+        except Exception as e:
+            logger.error("LHC Error logging output to file: %s", e)# Optionally, you can print or handle logging errors here.
+            pass
+
     def append_output(self, output) -> None:
         if isinstance(output, RequestOutput):
             self._update_num_prompt_tokens(output)
             output_token_ids = output.outputs[0].token_ids
             self._update_num_output_tokens(output_token_ids)
+      
             self.parser = get_streamable_parser_for_assistant()
             for token_id in output_token_ids:
                 self.parser.process(token_id)
             output_msgs = self.parser.messages
+            self._log_output_to_file(output_token_ids)
         else:
             # Tool output.
             output_msgs = output
         self._messages.extend(output_msgs)
+        # Log the output messages to a file
+        
 
     @property
     def messages(self) -> list:
@@ -187,6 +235,7 @@ class StreamingHarmonyContext(HarmonyContext):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        logger.info("fuck Initializing StreamingHarmonyContext")
         self.last_output = None
 
         self.parser = get_streamable_parser_for_assistant()
@@ -209,6 +258,7 @@ class StreamingHarmonyContext(HarmonyContext):
             # (finished=True), then the next token processed will mark the
             # beginning of a new message
             self.first_tok_of_message = output.finished
+     
             tok = output.outputs[0].token_ids[0]
             self.parser.process(tok)
             self._update_num_output_tokens(output.outputs[0].token_ids)

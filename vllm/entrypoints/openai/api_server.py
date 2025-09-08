@@ -1703,6 +1703,9 @@ async def init_app_state(
                     "This discrepancy may lead to performance degradation.",
                     resolved_chat_template, args.model)
 
+    #NOTE Hanchen demo means that we are using the two built in tools from GPT-OSS, 
+    # TODO Hanchen will need to make these things automatically pass along to requests for the 
+    # this will get passed along all the way to harmony context.
     if args.tool_server == "demo":
         tool_server: Optional[ToolServer] = DemoToolServer()
     elif args.tool_server:

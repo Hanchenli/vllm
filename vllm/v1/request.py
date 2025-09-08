@@ -17,7 +17,8 @@ from vllm.v1.utils import ConstantList
 if TYPE_CHECKING:
     from vllm.lora.request import LoRARequest
     from vllm.v1.core.kv_cache_utils import BlockHash
-
+from vllm.logger import init_logger
+logger = init_logger(__name__)  
 
 class Request:
 
@@ -66,6 +67,8 @@ class Request:
             assert sampling_params.max_tokens is not None
             self.max_tokens = sampling_params.max_tokens
             if sampling_params.guided_decoding is not None:
+                logger.info("This should happen, setting structured output to true")
+                logger.info("fuck request id %s", self.request_id)
                 self.status = RequestStatus.WAITING_FOR_FSM
                 self.use_structured_output = True
 

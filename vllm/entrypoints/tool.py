@@ -50,10 +50,11 @@ class HarmonyBrowserTool(Tool):
         self.enabled = True
         exa_api_key = os.getenv("EXA_API_KEY")
         if not exa_api_key:
+            logger.info("fuck it is not enabled baby")
             self.enabled = False
             logger.warning_once("EXA_API_KEY is not set, browsing is disabled")
             return
-
+        logger.info("fuck Iit should be enabled baby")
         try:
             validate_gpt_oss_install()
             from gpt_oss.tools.simple_browser import SimpleBrowserTool

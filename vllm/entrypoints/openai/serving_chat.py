@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import os
 import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from collections.abc import Sequence as GenericSequence
@@ -157,6 +158,10 @@ class OpenAIServingChat(OpenAIServing):
         # Please use the Responses API instead.
         self.supports_code_interpreter = False
         self.python_tool = None
+        
+        # Setup simple output file
+        os.makedirs("./vllm_chat_logs", exist_ok=True)
+        self.output_file = "./vllm_chat_logs/outputs.txt"
 
     async def create_chat_completion(
         self,
@@ -215,8 +220,10 @@ class OpenAIServingChat(OpenAIServing):
                     or (request.tool_choice == "none"
                         and self.exclude_tools_when_tool_choice_none)):
                 tool_dicts = None
+                #TODO Hanchen add structure tag to the request if not present
             else:
                 tool_dicts = [tool.model_dump() for tool in request.tools]
+                #TODO add structure tag to the request if not present
 
             if not self.use_harmony:
                 # Common case.
@@ -519,6 +526,7 @@ class OpenAIServingChat(OpenAIServing):
             added_content_delta_arr = [False] * num_choices
             reasoning_end_arr = [False] * num_choices
         elif request.tool_choice == "required":
+            #TODO Hanchen (Not sure if this is true) this will then require structure decoding
             all_previous_token_ids = None
         else:
             all_previous_token_ids = None
@@ -901,6 +909,19 @@ class OpenAIServingChat(OpenAIServing):
 
                     # set the previous values for the next iteration
                     previous_num_tokens[i] += len(output.token_ids)
+                    
+                    # Write each token to file after decoding
+                    if output.token_ids:
+                        logger.info("fuck Writing each token to file")
+                        try:
+                            # Decode tokens to text
+                            decoded_text = tokenizer.decode(output.token_ids)
+                            # Append to output file
+                            with open(self.output_file, "a", encoding="utf-8") as f:
+                                f.write(decoded_text)
+                        except Exception:
+                            # Ignore decoding errors
+                            pass
 
                     # if the message delta is None (e.g. because it was a
                     # "control token" for tool calls or the parser otherwise
@@ -1117,6 +1138,19 @@ class OpenAIServingChat(OpenAIServing):
         for output in final_res.outputs:
             token_ids = output.token_ids
             out_logprobs = output.logprobs
+            
+            # Write full completion tokens to file
+            if token_ids:
+                logger.info("fuck Writing full completion tokens to file")
+                try:
+                    # Decode tokens to text
+                    decoded_text = tokenizer.decode(token_ids)
+                    # Append to output file with a newline for full completions
+                    with open(self.output_file, "a", encoding="utf-8") as f:
+                        f.write(f"\n--- FULL COMPLETION ---\n{decoded_text}\n")
+                except Exception:
+                    # Ignore decoding errors
+                    pass
 
             if request.logprobs and request.top_logprobs is not None:
                 assert out_logprobs is not None, "Did not output logprobs"

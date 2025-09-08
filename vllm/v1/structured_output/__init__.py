@@ -15,7 +15,7 @@ from vllm.v1.structured_output.backend_guidance import GuidanceBackend
 from vllm.v1.structured_output.backend_types import (StructuredOutputBackend,
                                                      StructuredOutputGrammar)
 from vllm.v1.structured_output.backend_xgrammar import XgrammarBackend
-
+from xgrammar.testing import _get_masked_tokens_from_bitmask
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
@@ -28,7 +28,7 @@ else:
 
 logger = init_logger(__name__)
 
-
+#TODO Hanchen this manages structured output 
 class StructuredOutputManager:
     """Engine-level manager for structured output requests."""
 
@@ -145,8 +145,10 @@ class StructuredOutputManager:
     ) -> None:
         assert self._grammar_bitmask is not None
         for grammar, index, apply_bitmask in batch:
+
             if apply_bitmask and not grammar.is_terminated():
                 grammar.fill_bitmask(self._grammar_bitmask, index)
+                logger.info("Rejecting tokens %s", _get_masked_tokens_from_bitmask(self._grammar_bitmask, index))
             else:
                 # Note that for thinking support, we will need to
                 # reset the relevant part of the bitmask for consequent
@@ -205,8 +207,10 @@ class StructuredOutputManager:
                 if TYPE_CHECKING:
                     assert structured_output_request is not None
                     assert structured_output_request.grammar is not None
-
+                
                 apply_bitmask = self.should_fill_bitmask(request)
+                apply_bitmask = True
+
                 batch.append((structured_output_request.grammar,
                               cumulative_index, apply_bitmask))
                 if len(batch) == self.fill_bitmask_parallel_batch_size:
@@ -230,6 +234,7 @@ class StructuredOutputManager:
                     assert structured_output_request is not None
                     assert structured_output_request.grammar is not None
                 apply_bitmask = self.should_fill_bitmask(request)
+                apply_bitmask = True
 
                 state_advancements = 0
                 req_tokens = scheduled_spec_decode_tokens.get(req_id, [])
@@ -256,6 +261,7 @@ class StructuredOutputManager:
         # and deserialization when sending this to the GPU workers.
         return bitmask_tensor.numpy()
 
+    #NOTE Hanchen, this line actually preventing the bitmask from being filled. 
     def should_fill_bitmask(self, request: Request) -> bool:
         if self.reasoner is not None:
             assert request.structured_output_request is not None

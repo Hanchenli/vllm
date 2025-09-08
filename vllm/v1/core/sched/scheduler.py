@@ -559,6 +559,8 @@ class Scheduler(SchedulerInterface):
             scheduled_spec_decode_tokens,
             req_to_new_blocks,
         )
+
+        #TODO Hanchen, before the next line we should have already set the requests to use structured decoding
         structured_output_request_ids, grammar_bitmask = (
             self.get_grammar_bitmask(self.running,
                                      scheduled_spec_decode_tokens))
@@ -820,21 +822,44 @@ class Scheduler(SchedulerInterface):
         # uses structured decoding.
         structured_output_request_ids: dict[str, int] = {}
         for i, req in enumerate(requests):
+            logger.info("In this loop the ID should match the previous one since there is only one request id %s", req.request_id)
             if req.use_structured_output:
                 # PERF: in case of chunked prefill,
                 # request might not include any new tokens.
                 # Therefore, we might introduce some additional
                 # cycle to fill in the bitmask, which could be a big no-op.
+                logger.info("fuck structured output request found%s", req.structured_output_request.sampling_params.guided_decoding.structural_tag)
+                logger.info("fuck structured output request id %s", req.request_id)
                 structured_output_request_ids[req.request_id] = i
 
+            #TODO Hanchen should modify this to also include requests that need are in middle of tool calling 
+        # logger.info("fuck structured output request ids", str(structured_output_request_ids))
         if not structured_output_request_ids:
             bitmask = None
+            logger.info("fuck ERROR No structured output requests found")
         else:
+            #TODO Hanchen the requests will include a field called StructuredOutputRequest, which will need to be modified by here
             bitmask = self.structured_output_manager.grammar_bitmask(
                 self.requests,
                 structured_output_request_ids,
                 scheduled_spec_decode_tokens,
             )
+            logger.info("fuck bitmask %s", bitmask)
+
+            # Checker: Output if bitmask has any restriction (i.e., not all tokens allowed)
+            if bitmask is not None:
+                for i, mask in enumerate(bitmask):
+                    if mask is None:
+                        continue
+                    if not all(mask):
+                        from xgrammar.testing import _get_masked_tokens_from_bitmask
+                        # Need to get vocab_size from somewhere - assuming it's available from tokenizer
+                        vocab_size = len(mask)
+                        list_int = _get_masked_tokens_from_bitmask(mask, vocab_size)
+                        logger.info("Masked token ids (list of integers): %s", list_int)
+                        logger.info(
+                            f"Grammar bitmask for request batch idx {i} restricts some tokens."
+                        )
         return structured_output_request_ids, bitmask
 
     def update_from_output(
@@ -897,6 +922,16 @@ class Scheduler(SchedulerInterface):
             if new_token_ids:
                 new_token_ids, stopped = self._update_request_with_output(
                     request, new_token_ids)
+
+            logger.info("fuck Here are thenew_token_ids %s", new_token_ids)
+            # INSERT_YOUR_CODE
+            try:
+                with open("./token_id_log", "a") as f:
+                    f.write(f"{new_token_ids}\n")
+            except Exception:
+                pass
+
+            
 
             # Stop checking for pooler models.
             pooler_output = None
@@ -996,9 +1031,21 @@ class Scheduler(SchedulerInterface):
 
         return engine_core_outputs
 
+    #TODO Hanchen this function will check if the new_token_ids plus previous token ids signifies that funcions will potentially be called.
+    #  
+    # if yes and no tools are available, then we need to adopt structured output to disallow function calls.
+    # If yes and tools are required, then we need to ensure that the request is generating function calls for now. 
+    # Also need to store the original structure output request because we will need to load it back to the request
+    def _check_for_structured_output(self, new_token_ids: list[int]) -> bool:
+        for token_id in new_token_ids:
+            if token_id == 10000:
+                return True
+        return False
+    
     def _update_request_with_output(
         self,
         request: Request,
+
         new_token_ids: list[int],
     ) -> tuple[list[int], bool]:
         # Append generated tokens and check for stop. Note that if

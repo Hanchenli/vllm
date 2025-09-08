@@ -20,6 +20,7 @@ from vllm.v1.structured_output.backend_types import (StructuredOutputBackend,
 from vllm.v1.structured_output.utils import (choice_as_grammar,
                                              convert_lark_to_ebnf,
                                              grammar_is_likely_lark)
+from xgrammar.structural_tag import StructuralTag
 
 if TYPE_CHECKING:
     import xgrammar as xgr
@@ -108,7 +109,9 @@ class XgrammarBackend(StructuredOutputBackend):
                     end=s["end"],
                 ) for s in s_tag["structures"]
             ]
-            ctx = self.compiler.compile_structural_tag(tags, s_tag["triggers"])
+            structural_tag = StructuralTag.from_legacy_structural_tag(tags, s_tag["triggers"])
+            ctx = self.compiler.compile_structural_tag(structural_tag)
+            logger.info("fuck ctx %s", str(s_tag["triggers"]) )
         else:
             logger.error(
                 "Validation should have already occurred. Please file an issue."
@@ -191,6 +194,7 @@ class XgrammarGrammar(StructuredOutputGrammar):
         self._is_terminated = self.matcher.is_terminated()
 
     def fill_bitmask(self, bitmask: torch.Tensor, idx: int) -> None:
+        logger.info("fuck filling bitmask in xgrammar %s", bitmask)
         self.matcher.fill_next_token_bitmask(bitmask, idx)
 
     def is_terminated(self) -> bool:
@@ -318,6 +322,7 @@ def validate_xgrammar_grammar(sampling_params: SamplingParams) -> None:
                     end=s["end"],
                 ) for s in s_tag["structures"]
             ]
-            xgr.Grammar.from_structural_tag(tags, s_tag["triggers"])
+            structural_tag = StructuralTag.from_legacy_structural_tag(tags, s_tag["triggers"])
+            xgr.Grammar.from_structural_tag(structural_tag)
         except Exception as e:
             raise ValueError("Invalid structural tag specification.") from e

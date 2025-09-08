@@ -985,6 +985,8 @@ class OpenAIServing:
                 **kwargs,
             )
             async for res in generator:
+                #NOTE Hanchen for each token generated, we append it to context
+                #NOTE we can use request ID to update the request to use structured decoding
                 context.append_output(res)
                 # NOTE(woosuk): The stop condition is handled by the engine.
                 yield context
@@ -993,6 +995,8 @@ class OpenAIServing:
                 # The model did not ask for a tool call, so we're done.
                 break
 
+            #TODO Hanchen Need to update request to make structured output none again.
+            
             # Call the tool and update the context with the result.
             tool_output = await context.call_tool()
             context.append_output(tool_output)

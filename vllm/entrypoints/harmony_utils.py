@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+#TODO hanchen we are not modifying this file. this file is used to generate user response for api server.
 import datetime
 import json
 from collections.abc import Iterable, Sequence

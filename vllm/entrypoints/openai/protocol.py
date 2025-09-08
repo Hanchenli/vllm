@@ -329,6 +329,7 @@ class ResponsesRequest(OpenAIBaseModel):
         default_max_tokens: int,
         default_sampling_params: Optional[dict] = None,
     ) -> SamplingParams:
+        logger.info("I am in Chat Completion")
         if self.max_output_tokens is None:
             max_tokens = default_max_tokens
         else:
@@ -648,7 +649,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
         logits_processor_pattern: Optional[str],
         default_sampling_params: dict,
     ) -> SamplingParams:
-
+        logger.info("I am in Chat Completion")
         # Default parameters
         if (repetition_penalty := self.repetition_penalty) is None:
             repetition_penalty = default_sampling_params.get(
@@ -686,6 +687,8 @@ class ChatCompletionRequest(OpenAIBaseModel):
                     structural_tag, StructuralTagResponseFormat)
                 s_tag_obj = structural_tag.model_dump(by_alias=True)
                 self.structural_tag = json.dumps(s_tag_obj)
+                #NOTE Hanchen Printing the structural_tag string in chat completion
+                logger.info("structural_tag from chat completion: %s", self.structural_tag)
 
         guided_decoding = GuidedDecodingParams.from_optional(
             json=self._get_guided_json_from_tool() or self.guided_json,
@@ -1148,7 +1151,7 @@ class CompletionRequest(OpenAIBaseModel):
         logits_processor_pattern: Optional[str],
         default_sampling_params: Optional[dict] = None,
     ) -> SamplingParams:
-
+        logger.info("I am in Completion")
         if default_sampling_params is None:
             default_sampling_params = {}
 
