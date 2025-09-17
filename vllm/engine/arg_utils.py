@@ -354,6 +354,8 @@ class EngineArgs:
     quantization: Optional[QuantizationMethods] = ModelConfig.quantization
     enforce_eager: bool = ModelConfig.enforce_eager
     max_seq_len_to_capture: int = ModelConfig.max_seq_len_to_capture
+    need_structured_in_reasoning: bool = \
+        ModelConfig.need_structured_in_reasoning
     disable_custom_all_reduce: bool = ParallelConfig.disable_custom_all_reduce
     limit_mm_per_prompt: dict[str, int] = \
         get_field(MultiModalConfig, "limit_per_prompt")
@@ -368,6 +370,7 @@ class EngineArgs:
     mm_encoder_tp_mode: MMEncoderTPMode = MultiModalConfig.mm_encoder_tp_mode
     io_processor_plugin: Optional[str] = None
     skip_mm_profiling: bool = MultiModalConfig.skip_mm_profiling
+
     # LoRA fields
     enable_lora: bool = False
     enable_lora_bias: bool = LoRAConfig.bias_enabled
@@ -578,6 +581,11 @@ class EngineArgs:
                                  **model_kwargs["logits_processors"])
         model_group.add_argument("--io-processor-plugin",
                                  **model_kwargs["io_processor_plugin"])
+        model_group.add_argument(
+            "--structured-in-reasoning",
+            dest="need_structured_in_reasoning",
+            **model_kwargs["need_structured_in_reasoning"],
+        )
 
         # Model loading arguments
         load_kwargs = get_kwargs(LoadConfig)
@@ -997,6 +1005,7 @@ class EngineArgs:
             override_attention_dtype=self.override_attention_dtype,
             logits_processors=self.logits_processors,
             io_processor_plugin=self.io_processor_plugin,
+            need_structured_in_reasoning=self.need_structured_in_reasoning,
         )
 
     def validate_tensorizer_args(self):

@@ -501,6 +501,8 @@ class ModelConfig:
     definitions"""
     io_processor_plugin: Optional[str] = None
     """IOProcessor plugin name to load at model startup"""
+    need_structured_in_reasoning: bool = False
+    """Whether the model needs structured in reasoning."""
 
     def compute_hash(self) -> str:
         """
