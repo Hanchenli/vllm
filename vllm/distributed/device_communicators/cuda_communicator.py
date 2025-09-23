@@ -7,6 +7,12 @@ import torch
 from torch.distributed import ProcessGroup
 
 import vllm.envs as envs
+from vllm.distributed.device_communicators.all_reduce_utils import (
+    should_nccl_symm_mem_allreduce)
+from vllm.distributed.device_communicators.pynccl import (
+    register_nccl_symmetric_ops)
+from vllm.distributed.device_communicators.pynccl_allocator import (
+    is_symmetric_memory_enabled)
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
 
@@ -53,15 +59,25 @@ class CudaCommunicator(DeviceCommunicatorBase):
                 group=self.cpu_group,
                 device=self.device,
             )
+            if is_symmetric_memory_enabled():
+                register_nccl_symmetric_ops(self.pynccl_comm)
 
         self.ca_comm: Optional[CustomAllreduce] = None
         self.qr_comm: Optional[QuickAllReduce] = None
         self.symm_mem_comm: Optional[SymmMemCommunicator] = None
+        if envs.VLLM_ALLREDUCE_USE_SYMM_MEM and current_platform.is_cuda():
+            self.symm_mem_comm = SymmMemCommunicator(
+                group=self.cpu_group,
+                device=self.device,
+            )
+
         if use_custom_allreduce and self.world_size > 1:
             # Initialize a custom fast all-reduce implementation.
             self.ca_comm = CustomAllreduce(
                 group=self.cpu_group,
                 device=self.device,
+                symm_mem_enabled=(self.symm_mem_comm is not None
+                                  and not self.symm_mem_comm.disabled),
             )
 
             if current_platform.is_rocm():
@@ -72,11 +88,6 @@ class CudaCommunicator(DeviceCommunicatorBase):
                 # currently be an MI300 series.
                 self.qr_comm = QuickAllReduce(group=self.cpu_group,
                                               device=self.device)
-        if envs.VLLM_ALLREDUCE_USE_SYMM_MEM and current_platform.is_cuda():
-            self.symm_mem_comm = SymmMemCommunicator(
-                group=self.cpu_group,
-                device=self.device,
-            )
 
         if self.use_all2all:
             all2all_backend = envs.VLLM_ALL2ALL_BACKEND
@@ -84,6 +95,10 @@ class CudaCommunicator(DeviceCommunicatorBase):
                 from .all2all import NaiveAll2AllManager
                 self.all2all_manager = NaiveAll2AllManager(self.cpu_group)
                 logger.info("Using naive all2all manager.")
+            elif all2all_backend == "allgather_reducescatter":
+                from .all2all import AgRsAll2AllManager
+                self.all2all_manager = AgRsAll2AllManager(self.cpu_group)
+                logger.info("Using AllGather-ReduceScatter all2all manager.")
             elif all2all_backend == "pplx":
                 from .all2all import PPLXAll2AllManager
                 self.all2all_manager = PPLXAll2AllManager(self.cpu_group)
@@ -100,6 +115,13 @@ class CudaCommunicator(DeviceCommunicatorBase):
                 raise ValueError(f"Unknown all2all backend: {all2all_backend}")
 
     def all_reduce(self, input_):
+        # since currently we perform copy input -> symm_input -> out-of-place AR
+        # return symm_output, we don't need to check if input is symmetric
+        if self.pynccl_comm is not None and \
+            should_nccl_symm_mem_allreduce(self.pynccl_comm.world_size,input_):
+            out = torch.ops.vllm.all_reduce_symmetric_with_copy(input_)
+            if out is not None:
+                return out
         # always try quick reduce first, then custom allreduce,
         # and then pynccl. (quick reduce just for ROCM MI3*)
         qr_comm = self.qr_comm

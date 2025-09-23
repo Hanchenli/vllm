@@ -381,6 +381,7 @@ class MLACommonMetadata(Generic[D]):
 
     num_reqs: int
     max_query_len: int
+    max_seq_len: int
 
     num_actual_tokens: int  # Number of tokens excluding padding.
     query_start_loc: torch.Tensor
@@ -411,7 +412,8 @@ M = TypeVar("M", bound=MLACommonMetadata)
 def use_flashinfer_prefill() -> bool:
     # For blackwell default to flashinfer prefill if it's available since
     # it is faster than FA2.
-    return (flashinfer_available and not envs.VLLM_USE_CUDNN_PREFILL
+    return (not envs.VLLM_DISABLE_FLASHINFER_PREFILL and flashinfer_available
+            and not envs.VLLM_USE_CUDNN_PREFILL
             and current_platform.is_device_capability(100))
 
 
@@ -462,7 +464,7 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
             self.dcp_world_size = 1
             self.dcp_rank = 0
 
-        # Dont try to access the runner on AMD
+        # Don't try to access the runner on AMD
         if self.aot_schedule:
             self.page_size = self.kv_cache_spec.block_size
 
@@ -479,7 +481,7 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
             # which would result in up-projected context being
             #   2*(192*128)*(64*1024) = 3gb
             # (assuming 192 QK head dim, 128 heads, and fp16)
-            128 * 1024)
+            64 * 1024)
         assert self.chunked_prefill_workspace_size >= \
             scheduler_config.max_num_seqs * cache_config.block_size
         if self.dcp_world_size > 1:
@@ -583,7 +585,6 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
             window_left=self._global_hyperparameters.window_left,
             logits_soft_cap=self._global_hyperparameters.logits_soft_cap,
             q_data_type=self.model_config.dtype,
-            kv_data_type=self.kv_cache_spec.dtype,
         )
 
         # Prepare context prefills
@@ -604,7 +605,6 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
                     logits_soft_cap=self._global_hyperparameters.
                     logits_soft_cap,
                     q_data_type=self.model_config.dtype,
-                    kv_data_type=self.kv_cache_spec.dtype,
                 )
 
         prefill.prefill_main = self._fi_prefill_main
@@ -644,6 +644,7 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
         num_reqs = common_attn_metadata.num_reqs
         num_tokens = common_attn_metadata.num_actual_tokens
         max_query_len = common_attn_metadata.max_query_len
+        max_seq_len = common_attn_metadata.max_seq_len
 
         # Note(simon): be careful about the CPU <> GPU memory movement in this
         # function. We should avoid GPU -> CPU sync as much as possible because
@@ -830,6 +831,7 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
         attn_metadata = self.metadata_cls(
             num_reqs=common_attn_metadata.num_reqs,
             max_query_len=common_attn_metadata.max_query_len,
+            max_seq_len=max_seq_len,
             num_actual_tokens=num_tokens,
             query_start_loc=query_start_loc,
             slot_mapping=slot_mapping,
@@ -940,6 +942,7 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
         qk_head_dim: int,
         v_head_dim: int,
         kv_b_proj: ColumnParallelLinear,
+        q_pad_num_heads: Optional[int] = None,
     ) -> None:
         if kv_sharing_target_layer_name is not None:
             raise NotImplementedError("KV sharing is not supported for MLA")
@@ -957,6 +960,7 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
         self.qk_head_dim = qk_head_dim
         self.v_head_dim = v_head_dim
         self.kv_b_proj = kv_b_proj
+        self.q_pad_num_heads = q_pad_num_heads
 
         if use_flashinfer_prefill():
             logger.debug_once("Using FlashInfer prefill for MLA")
@@ -1132,7 +1136,7 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
             True,  #Indicates actual_seq_lens are on GPU or CPU.
         )
 
-    def _v_up_proj(self, x):
+    def _v_up_proj(self, x: torch.Tensor, out: torch.Tensor):
         # Convert from (B, N, L) to (N, B, L)
         x = x.view(-1, self.num_heads, self.kv_lora_rank).transpose(0, 1)
         if is_rocm_aiter_fp8bmm_enabled():
@@ -1144,12 +1148,23 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
                                      transpose_bm=True)
             # Convert from (B, N, V) to (B, N * V)
             x = x.reshape(-1, self.num_heads * self.v_head_dim)
+            # Copy result
+            out.copy_(x)
         else:
+            # Convert from (B, N * V) to (N, B, V)
+            out = out.view(-1, self.num_heads, self.v_head_dim).transpose(0, 1)
+
             # Multiply (N, B, L) x (N, L, V) -> (N, B, V)
-            x = torch.bmm(x, self.W_UV)
+            torch.bmm(x, self.W_UV, out=out)  # Reuse "out" to make it "hot"
+
             # Convert from (N, B, V) to (B, N * V)
-            x = x.transpose(0, 1).reshape(-1, self.num_heads * self.v_head_dim)
-        return x
+            out_new = out.transpose(0, 1).reshape(
+                -1, self.num_heads * self.v_head_dim)
+
+            # Adjust output buffer shape back to the original (B, N * V)
+            N, B, V = out.shape
+            out.resize_((B, N * V))
+            out.copy_(out_new)  # Copy result
 
     def process_weights_after_loading(self, act_dtype: torch.dtype):
 
@@ -1319,7 +1334,7 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
         k_scale: torch.Tensor,
         dcp_world_size: int,
     ):
-        assert k_scale is None, "DCP not support sacled kvcache now."
+        assert k_scale is None, "DCP not support scaled kvcache now."
         assert attn_metadata.prefill is not None
         prefill_metadata = attn_metadata.prefill
         assert prefill_metadata.chunked_context is not None
@@ -1557,6 +1572,15 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
             # Convert from (B, N, P) to (N, B, P)
             decode_q_nope = decode_q_nope.transpose(0, 1)
 
+            # Pads the head_dim if necessary (for the underlying kernel)
+            if self.q_pad_num_heads is not None:
+                B, N, L = decode_q_pe.shape
+                decode_pe_padded = decode_q_pe.new_empty(
+                    (B, self.q_pad_num_heads, L))
+                decode_pe_padded.resize_((B, N, L))
+                decode_pe_padded.copy_(decode_q_pe)
+                decode_q_pe = decode_pe_padded
+
             if is_rocm_aiter_fp8bmm_enabled():
                 # Multiply+Transpose (N, B, P)x(N, P, L)->(N, B, L)->(B, N, L)
                 decode_ql_nope = aiter_triton_fp8_bmm(decode_q_nope,
@@ -1565,8 +1589,19 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
                                                       group_size=128,
                                                       transpose_bm=True)
             else:
+                # Pads the head_dim if necessary (for the underlying kernel)
+                N, B, P = decode_q_nope.shape
+                _, _, L = self.W_UK_T.shape
+                if self.q_pad_num_heads is not None:
+                    decode_ql_nope = decode_q_nope.new_empty(
+                        (self.q_pad_num_heads, B, L))
+                    decode_ql_nope.resize_((N, B, L))
+
+                else:
+                    decode_ql_nope = decode_q_nope.new_empty((N, B, L))
+
                 # Multiply (N, B, P) x (N, P, L) -> (N, B, L)
-                decode_ql_nope = torch.bmm(decode_q_nope, self.W_UK_T)
+                torch.bmm(decode_q_nope, self.W_UK_T, out=decode_ql_nope)
                 # Convert from (N, B, L) to (B, N, L)
                 decode_ql_nope = decode_ql_nope.transpose(0, 1)
 
@@ -1601,5 +1636,5 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
                 attn_out = cp_lse_ag_out_rs(attn_out, lse, get_dcp_group())
 
             # v_up projection
-            output[:num_decode_tokens] = self._v_up_proj(attn_out)
+            self._v_up_proj(attn_out, out=output[:num_decode_tokens])
         return output_padded
