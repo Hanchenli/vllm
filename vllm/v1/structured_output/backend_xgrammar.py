@@ -316,8 +316,6 @@ def validate_xgrammar_grammar(sampling_params: SamplingParams) -> None:
         return
 
     if gd_params.structural_tag:
-        logger.info("Verifying structural tag grammar_spec:\%s",
-                    gd_params.structural_tag)
         try:
             s_tag = json.loads(gd_params.structural_tag)
 

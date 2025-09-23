@@ -1716,16 +1716,13 @@ async def init_app_state(
                     resolved_chat_template, args.model)
 
     if args.tool_server == "demo":
-        logger.info("Using demo tool server")
         tool_server: Optional[ToolServer] = DemoToolServer()
         assert isinstance(tool_server, DemoToolServer)
         await tool_server.init_and_validate()
     elif args.tool_server:
-        logger.info("Using MCP tool server")
         tool_server = MCPToolServer()
         await tool_server.add_tool_server(args.tool_server)
     else:
-        logger.info("Using no tool server")
         tool_server = None
 
     # Merge default_mm_loras into the static lora_modules
